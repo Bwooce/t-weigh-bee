@@ -1,0 +1,22 @@
+# Credentials - never commit!
+lorawan_credentials.h
+
+# Build artifacts
+*.bin
+*.elf
+*.hex
+build/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# T-Weigh repository (cloned for reference)
+T-Weigh/
