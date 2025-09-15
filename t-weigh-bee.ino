@@ -175,7 +175,7 @@ uint8_t loraPlan = LORA_PLAN_AU915;  // Default to AU915
 uint8_t loraSubBand = 2;             // Default to sub-band 2 for TTN
 uint8_t loraDataRate = 0;            // Default to DR0 (SF12) for maximum range
 uint16_t wakeStabilizeMs = WAKE_STABILIZE_MS;  // HX711 stabilization time
-bool enforceDwellTime = true;        // Default to enforce 400ms dwell time for AU915
+bool enforceDwellTime = false;       // Disable dwell time for testing SF12
 bool hx711PowerControl = true;       // Default to power down HX711 during sleep
 bool debugMode = DEBUG;               // Runtime debug mode
 const char* firmwareVersion = "1.0.0";
@@ -907,6 +907,12 @@ void setup() {
                         // Set configured data rate
                         DEBUG_PRINTF("[LoRa] Setting data rate to DR%d (SF%d)\n", loraDataRate, 12 - loraDataRate);
                         node->setDatarate(loraDataRate);
+
+                        // Apply dwell time setting
+                        if (!enforceDwellTime) {
+                            DEBUG_PRINTLN("[LoRa] Disabling dwell time enforcement for restored session");
+                            node->setDwellTime(false);
+                        }
                     } else {
                         DEBUG_PRINTF("[LoRa] Failed to activate session: %d\n", state);
                         sessionSaved = false;
@@ -997,6 +1003,12 @@ void setup() {
                 // Set configured data rate
                 DEBUG_PRINTF("[LoRa] Setting data rate to DR%d (SF%d)\n", loraDataRate, 12 - loraDataRate);
                 node->setDatarate(loraDataRate);
+
+                // Apply dwell time setting after join
+                if (!enforceDwellTime) {
+                    DEBUG_PRINTLN("[LoRa] Disabling dwell time enforcement after join");
+                    node->setDwellTime(false);
+                }
 
                 // Get nonces first, then session (order matters for RadioLib)
                 uint8_t* nonces = node->getBufferNonces();
