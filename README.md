@@ -64,13 +64,13 @@ arduino-cli monitor --port /dev/ttyUSB0 --config baudrate=115200
 
 ## Data Format
 
-### Data Uplink (Port 1, 12 bytes)
+### Data Uplink (Port 1, 8 bytes)
 | Bytes | Content | Format | Range |
 |-------|---------|--------|-------|
-| 0-2   | Channel 0 raw ADC | int24, big-endian, signed | -8,388,608 to 8,388,607 |
-| 3-5   | Channel 1 raw ADC | int24, big-endian, signed | -8,388,608 to 8,388,607 |
-| 6-8   | Channel 2 raw ADC | int24, big-endian, signed | -8,388,608 to 8,388,607 |
-| 9-11  | Channel 3 raw ADC | int24, big-endian, signed | -8,388,608 to 8,388,607 |
+| 0-1   | Channel 0 raw value | int16, big-endian, signed | -32,768 to 32,767 |
+| 2-3   | Channel 1 raw value | int16, big-endian, signed | -32,768 to 32,767 |
+| 4-5   | Channel 2 raw value | int16, big-endian, signed | -32,768 to 32,767 |
+| 6-7   | Channel 3 raw value | int16, big-endian, signed | -32,768 to 32,767 |
 
 **Note:** Raw ADC values are sent without tare or calibration. Application layer should handle conversion to actual weight.
 
@@ -88,10 +88,12 @@ Sent automatically after join and every 12 hours:
 | 8-11 | Firmware | 4 ASCII characters (e.g., "1.0.0") |
 
 **Flags byte (byte 7):**
-- Bit 0: Dwell time enforcement (0=disabled, 1=enabled)
-- Bit 1: HX711 power control (0=always on, 1=power down during sleep)
-- Bit 2: Debug mode (0=disabled, 1=enabled with serial output)
-- Bits 3-7: Reserved for future use
+- Bits 0-3 (lower nibble): Configuration flags
+  - Bit 0: Dwell time enforcement (0=disabled, 1=enabled)
+  - Bit 1: HX711 power control (0=always on, 1=power down during sleep)
+  - Bit 2: Debug mode (0=disabled, 1=enabled with serial output)
+  - Bit 3: Reserved
+- Bits 4-7 (upper nibble): Data rate (0=DR0/SF12, 1=DR1/SF11... 5=DR5/SF7)
 
 ## Downlink Commands (Port 1)
 
@@ -104,6 +106,7 @@ Sent automatically after join and every 12 hours:
 | 0x24    | 1 byte  | Set dwell time enforcement | 0=off, 1=on |
 | 0x25    | 1 byte  | Set HX711 power control | 0=off, 1=on |
 | 0x26    | 1 byte  | Set debug mode | 0=off, 1=on |
+| 0x27    | 1 byte  | Set data rate | 0=DR0/SF12, 1=DR1/SF11, 2=DR2/SF10, 3=DR3/SF9, 4=DR4/SF8, 5=DR5/SF7 |
 | 0x30    | None    | Request immediate config uplink | - |
 | 0xFF    | None    | Reset device | - |
 

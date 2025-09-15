@@ -2,14 +2,14 @@
  * T-Weigh LoRaWAN Sensor Node - RadioLib Implementation
  * Version: 1.0.0
  *
- * UPLINK DATA FORMAT (Port 1, 12 bytes):
+ * UPLINK DATA FORMAT (Port 1, 8 bytes):
  * ----------------------------------------
- * Bytes 0-2:  Channel 0 raw ADC value (int24, big-endian, signed)
- * Bytes 3-5:  Channel 1 raw ADC value (int24, big-endian, signed)
- * Bytes 6-8:  Channel 2 raw ADC value (int24, big-endian, signed)
- * Bytes 9-11: Channel 3 raw ADC value (int24, big-endian, signed)
+ * Bytes 0-1:  Channel 0 raw value (int16, big-endian, signed)
+ * Bytes 2-3:  Channel 1 raw value (int16, big-endian, signed)
+ * Bytes 4-5:  Channel 2 raw value (int16, big-endian, signed)
+ * Bytes 6-7:  Channel 3 raw value (int16, big-endian, signed)
  *
- * Raw ADC range: -8,388,608 to 8,388,607 (24-bit signed)
+ * Raw value range: -32,768 to 32,767 (16-bit signed)
  * Note: Application layer should handle tare/calibration
  *
  * CONFIG STATUS UPLINK (Port 2, 12 bytes):
@@ -116,7 +116,7 @@
 
 // LoRaWAN Configuration  
 #define LORAWAN_FPORT       1        // Application port
-#define LORAWAN_ADR         true     // Adaptive Data Rate
+#define LORAWAN_ADR         false    // Disable ADR for manual SF control
 
 // Downlink Commands
 #define CMD_SET_INTERVAL    0x20     // Set TX interval (followed by 2 bytes, seconds)
@@ -126,6 +126,7 @@
 #define CMD_SET_DWELL       0x24     // Set dwell time enforcement (followed by 1 byte: 0=off, 1=on)
 #define CMD_SET_HX711_PWR   0x25     // Set HX711 power control (followed by 1 byte: 0=off, 1=on)
 #define CMD_SET_DEBUG       0x26     // Set debug mode (followed by 1 byte: 0=off, 1=on)
+#define CMD_SET_DATARATE    0x27     // Set data rate/SF (followed by 1 byte: 0=SF12, 1=SF11, 2=SF10, 3=SF9, 4=SF8, 5=SF7)
 #define CMD_REQUEST_CONFIG  0x30     // Request config uplink
 #define CMD_RESET_DEVICE    0xFF     // Reset device
 
@@ -172,6 +173,7 @@ uint32_t txInterval = TX_INTERVAL_MS;
 bool joinedNetwork = false;
 uint8_t loraPlan = LORA_PLAN_AU915;  // Default to AU915
 uint8_t loraSubBand = 2;             // Default to sub-band 2 for TTN
+uint8_t loraDataRate = 0;            // Default to DR0 (SF12) for maximum range
 uint16_t wakeStabilizeMs = WAKE_STABILIZE_MS;  // HX711 stabilization time
 bool enforceDwellTime = true;        // Default to enforce 400ms dwell time for AU915
 bool hx711PowerControl = true;       // Default to power down HX711 during sleep
@@ -265,6 +267,7 @@ void loadPreferences() {
     // Load LoRa configuration
     loraPlan = preferences.getUChar("loraPlan", LORA_PLAN_AU915);
     loraSubBand = preferences.getUChar("subBand", 2);
+    loraDataRate = preferences.getUChar("dataRate", 0);
 
     // Load HX711 stabilization time
     wakeStabilizeMs = preferences.getUShort("stabilizeMs", WAKE_STABILIZE_MS);
@@ -299,6 +302,7 @@ void savePreferences() {
     // Save LoRa configuration
     preferences.putUChar("loraPlan", loraPlan);
     preferences.putUChar("subBand", loraSubBand);
+    preferences.putUChar("dataRate", loraDataRate);
 
     // Save HX711 stabilization time
     preferences.putUShort("stabilizeMs", wakeStabilizeMs);
@@ -350,21 +354,24 @@ void loadNoncesFromNVS() {
 // ================================
 
 void sendLoRaWANData() {
-    // Prepare payload (3 bytes per channel for 24-bit raw ADC values)
-    // HX711 provides 24-bit signed values (-8,388,608 to 8,388,607)
-    // Reducing from 16 to 12 bytes helps fit within 400ms dwell time at DR2
-    uint8_t payload[12];
+    // Prepare payload (2 bytes per channel for 16-bit values)
+    // Using 16-bit to fit within 11-byte limit for SF12 with dwell time
+    // This gives range of -32768 to 32767 which is sufficient for most scales
+    uint8_t payload[8];
     uint8_t payloadSize = 0;
 
     for (int i = 0; i < 4; i++) {
         long rawValue = readLoadCellRaw(i);
         DEBUG_PRINTF("[HX711] Ch%d: Raw ADC value=%ld\n", i, rawValue);
 
-        // Pack as big-endian 24-bit signed integer (3 bytes)
-        // Sign extension handled by casting to 24-bit before packing
-        payload[payloadSize++] = (rawValue >> 16) & 0xFF;
-        payload[payloadSize++] = (rawValue >> 8) & 0xFF;
-        payload[payloadSize++] = rawValue & 0xFF;
+        // Clamp to 16-bit range
+        int16_t value16 = rawValue;
+        if (rawValue > 32767) value16 = 32767;
+        else if (rawValue < -32768) value16 = -32768;
+
+        // Pack as big-endian 16-bit signed integer (2 bytes)
+        payload[payloadSize++] = (value16 >> 8) & 0xFF;
+        payload[payloadSize++] = value16 & 0xFF;
     }
 
     // Ensure all debug output is sent before continuing
@@ -509,6 +516,20 @@ void processDownlink(uint8_t* data, size_t len) {
                     Serial.flush();
                 }
                 savePreferences();
+            }
+            break;
+
+        case CMD_SET_DATARATE:
+            if (len >= 2) {
+                uint8_t newDataRate = data[1];
+                if (newDataRate <= 5) {  // DR0-DR5 for AU915
+                    loraDataRate = newDataRate;
+                    DEBUG_PRINTF("[CMD] Data rate set to DR%d (SF%d)\n", loraDataRate, 12 - loraDataRate);
+                    node->setDatarate(loraDataRate);
+                    savePreferences();
+                } else {
+                    DEBUG_PRINTF("[CMD] Invalid data rate: %d (must be 0-5)\n", newDataRate);
+                }
             }
             break;
 
@@ -661,8 +682,8 @@ void sendConfigUplink() {
     configPayload[5] = loraPlan;
     configPayload[6] = loraSubBand;
 
-    // Flags
-    configPayload[7] = 0;
+    // Flags (lower 4 bits) and Data Rate (upper 4 bits)
+    configPayload[7] = (loraDataRate << 4) & 0xF0;  // Data rate in upper nibble
     if (enforceDwellTime) configPayload[7] |= 0x01;
     if (hx711PowerControl) configPayload[7] |= 0x02;
     if (debugMode) configPayload[7] |= 0x04;
@@ -883,10 +904,9 @@ void setup() {
                         joinedNetwork = true;
 
                         // For AU915 with dwell time, use DR3 for 12-byte payload
-                        if (enforceDwellTime && loraPlan == LORA_PLAN_AU915) {
-                            DEBUG_PRINTLN("[LoRa] Setting DR3 for AU915 dwell time compliance with 12-byte payload");
-                            node->setDatarate(3);  // DR3 = SF9BW125
-                        }
+                        // Set configured data rate
+                        DEBUG_PRINTF("[LoRa] Setting data rate to DR%d (SF%d)\n", loraDataRate, 12 - loraDataRate);
+                        node->setDatarate(loraDataRate);
                     } else {
                         DEBUG_PRINTF("[LoRa] Failed to activate session: %d\n", state);
                         sessionSaved = false;
@@ -974,10 +994,9 @@ void setup() {
                 joinedNetwork = true;
 
                 // For AU915 with dwell time, use DR3 for 12-byte payload
-                if (enforceDwellTime && loraPlan == LORA_PLAN_AU915) {
-                    DEBUG_PRINTLN("[LoRa] Setting DR3 for AU915 dwell time compliance with 12-byte payload");
-                    node->setDatarate(3);  // DR3 = SF9BW125
-                }
+                // Set configured data rate
+                DEBUG_PRINTF("[LoRa] Setting data rate to DR%d (SF%d)\n", loraDataRate, 12 - loraDataRate);
+                node->setDatarate(loraDataRate);
 
                 // Get nonces first, then session (order matters for RadioLib)
                 uint8_t* nonces = node->getBufferNonces();
@@ -1066,11 +1085,9 @@ void setup() {
     
     // Normal operation - send data and sleep
     if (joinedNetwork) {
-        // For AU915 with dwell time, use DR3 for 12-byte payload
-        if (enforceDwellTime && loraPlan == LORA_PLAN_AU915) {
-            DEBUG_PRINTLN("[LoRa] Ensuring DR3 for AU915 dwell time compliance with 12-byte payload");
-            node->setDatarate(3);  // DR3 = SF9BW125
-        }
+        // Set configured data rate
+        DEBUG_PRINTF("[LoRa] Ensuring data rate DR%d (SF%d)\n", loraDataRate, 12 - loraDataRate);
+        node->setDatarate(loraDataRate);
 
         // Give the stack time to settle after join
         // Wait longer after a fresh join to respect duty cycle
