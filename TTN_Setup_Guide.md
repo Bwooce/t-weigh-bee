@@ -16,10 +16,9 @@ This project implements a LoRaWAN sensor node for the T-Weigh board that:
 
 ## Required Libraries
 
-Install these libraries via Arduino IDE Library Manager:
-1. **MCCI LoRaWAN LMIC library** by MCCI Catena
-2. **HX711** by Bogdan Necula
-3. **Wire** (included with Arduino)
+Install these libraries via Arduino CLI or Arduino IDE Library Manager:
+1. **RadioLib** by Jan Gromes - Universal wireless library with native SX1262 support
+2. **HX711** by Bogdan Necula - Load cell interface library
 
 ## The Things Network Setup
 
@@ -47,19 +46,23 @@ After device registration, go to device settings and copy:
 - **App Key** (MSB format)
 
 ### 5. Configure Code
-Update the credentials in `T-Weigh_LoRaWAN_LMIC.ino`:
+1. Copy `lorawan_credentials.h.example` to `lorawan_credentials.h`
+2. Update with your actual TTN credentials:
 
 ```cpp
-// Example values - REPLACE with your actual credentials!
-// Device EUI (LSB) - reverse the byte order from TTN console
-static const u1_t PROGMEM DEVEUI[8] = { 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF };
+// Device EUI (LSB format - reverse byte order from TTN console)
+uint64_t devEUI = 0x0123456789ABCDEF;
 
-// Application EUI (LSB) - reverse the byte order from TTN console  
-static const u1_t PROGMEM APPEUI[8] = { 0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10 };
+// Join/Application EUI (LSB format - usually all zeros for TTN)
+uint64_t joinEUI = 0x0000000000000000;
 
-// App Key (MSB) - copy exactly as shown in TTN console
-static const u1_t PROGMEM APPKEY[16] = { 0x2B, 0x7E, 0x15, 0x16, 0x28, 0xAE, 0xD2, 0xA6,
-                                          0xAB, 0xF7, 0x15, 0x88, 0x09, 0xCF, 0x4F, 0x3C };
+// Application Key (MSB format - copy exactly from TTN console)
+uint8_t appKey[] = { 0x2B, 0x7E, 0x15, 0x16, 0x28, 0xAE, 0xD2, 0xA6,
+                      0xAB, 0xF7, 0x15, 0x88, 0x09, 0xCF, 0x4F, 0x3C };
+
+// Network Key (not used for LoRaWAN 1.0.x, same as appKey)
+uint8_t nwkKey[] = { 0x2B, 0x7E, 0x15, 0x16, 0x28, 0xAE, 0xD2, 0xA6,
+                      0xAB, 0xF7, 0x15, 0x88, 0x09, 0xCF, 0x4F, 0x3C };
 ```
 
 ## Arduino IDE Setup
@@ -73,12 +76,12 @@ static const u1_t PROGMEM APPKEY[16] = { 0x2B, 0x7E, 0x15, 0x16, 0x28, 0xAE, 0xD
    - The T-Weigh uses a T-Micro32 module (LilyGO's name for their ESP32-PICO-D4 based module)
    - ESP32-PICO-D4 is Espressif's System-in-Package with integrated 4MB flash
 
-### 2. LMIC Configuration
-Create/edit `project_config/lmic_project_config.h`:
-```cpp
-#define CFG_au915 1
-#define CFG_sx1262_radio 1
-#define LMIC_USE_INTERRUPTS
+### 2. Compile and Upload
+Using Arduino CLI:
+```bash
+export PATH=$PATH:/home/bruce/Arduino/bin
+arduino-cli compile --fqbn esp32:esp32:pico32 t-weigh-bee.ino
+arduino-cli upload --fqbn esp32:esp32:pico32 --port /dev/ttyUSB0 t-weigh-bee.ino
 ```
 
 ### 3. Upload Settings
@@ -92,23 +95,49 @@ Create/edit `project_config/lmic_project_config.h`:
 Add this decoder in TTN Application → Payload Formatters:
 
 ```javascript
-function Decoder(bytes, port) {
+function decodeUplink(input) {
   var decoded = {};
-  
-  // Decode 4 weight values (int16, grams)
-  decoded.weight1_kg = ((bytes[0] << 8) | bytes[1]) / 1000.0;
-  decoded.weight2_kg = ((bytes[2] << 8) | bytes[3]) / 1000.0;
-  decoded.weight3_kg = ((bytes[4] << 8) | bytes[5]) / 1000.0;
-  decoded.weight4_kg = ((bytes[6] << 8) | bytes[7]) / 1000.0;
-  
-  // Total weight
-  decoded.total_kg = decoded.weight1_kg + decoded.weight2_kg + 
-                     decoded.weight3_kg + decoded.weight4_kg;
-  
-  // Battery voltage (uint16, mV)
-  decoded.battery_v = ((bytes[8] << 8) | bytes[9]) / 1000.0;
-  
-  return decoded;
+  var bytes = input.bytes;
+  var port = input.fPort;
+
+  if (port === 1) {
+    // Data uplink - 8 bytes with 16-bit signed values
+    // Convert from signed 16-bit to actual values
+    function toInt16(b1, b2) {
+      var val = (b1 << 8) | b2;
+      if (val > 32767) val -= 65536;
+      return val;
+    }
+
+    decoded.channel0_raw = toInt16(bytes[0], bytes[1]);
+    decoded.channel1_raw = toInt16(bytes[2], bytes[3]);
+    decoded.channel2_raw = toInt16(bytes[4], bytes[5]);
+    decoded.channel3_raw = toInt16(bytes[6], bytes[7]);
+
+    // Note: These are raw ADC values, apply calibration as needed
+    // Example: weight_grams = (raw_value - tare_value) / calibration_factor
+  } else if (port === 2) {
+    // Configuration uplink - 12 bytes
+    decoded.config_version = bytes[0];
+    decoded.tx_interval_sec = (bytes[1] << 8) | bytes[2];
+    decoded.stabilization_ms = (bytes[3] << 8) | bytes[4];
+    decoded.lora_plan = bytes[5];
+    decoded.sub_band = bytes[6];
+
+    // Flags byte (byte 7)
+    var flags = bytes[7];
+    decoded.data_rate = (flags >> 4) & 0x0F;
+    decoded.dwell_time = (flags & 0x01) ? true : false;
+    decoded.hx711_power = (flags & 0x02) ? true : false;
+    decoded.debug_mode = (flags & 0x04) ? true : false;
+
+    // Firmware version (4 ASCII chars)
+    decoded.firmware = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]);
+  }
+
+  return {
+    data: decoded
+  };
 }
 ```
 
@@ -116,9 +145,10 @@ function Decoder(bytes, port) {
 
 The code implements several power-saving features:
 1. **Deep Sleep**: ESP32 enters deep sleep between transmissions
-2. **RTC Memory**: Preserves calibration and session data across sleep cycles
-3. **Adaptive Data Rate**: Automatically adjusts spreading factor for optimal power/range
-4. **60-second interval**: Balances data freshness with battery life
+2. **RTC Memory**: Preserves LoRaWAN session data across sleep cycles
+3. **Manual Data Rate**: ADR disabled for full control over SF (default SF12 for max range)
+4. **HX711 Power Control**: Can power down load cell ADC during sleep
+5. **60-second interval**: Default interval, adjustable via downlink
 
 ## Calibration
 
@@ -168,9 +198,22 @@ With 60-second interval:
 - 5000mAh battery: ~5-8 weeks
 - Solar panel addition recommended for permanent installation
 
-## Downlink Commands
-- `0x01`: Trigger recalibration
-- Additional commands can be added in `onEvent()` function
+## Downlink Commands (Port 1)
+
+| Command | Payload | Description |
+|---------|---------|-------------|
+| 0x01 | None | Tare all channels |
+| 0x10-0x13 | None | Tare specific channel (0-3) |
+| 0x20 | 2 bytes | Set TX interval (10-65535 seconds) |
+| 0x21 | 2 bytes | Set stabilization time (100-10000 ms) |
+| 0x22 | 1 byte | Set LoRa plan (0=EU868, 1=US915, 3=AU915, etc.) |
+| 0x23 | 1 byte | Set sub-band (0-8) |
+| 0x24 | 1 byte | Set dwell time (0=off, 1=on) |
+| 0x25 | 1 byte | Set HX711 power control (0=off, 1=on) |
+| 0x26 | 1 byte | Set debug mode (0=off, 1=on) |
+| 0x27 | 1 byte | Set data rate (0=SF12, 1=SF11, 2=SF10, 3=SF9, 4=SF8, 5=SF7) |
+| 0x30 | None | Request config uplink |
+| 0xFF | None | Reset device |
 
 ## Data Visualization
 TTN integrations available:
@@ -182,4 +225,4 @@ TTN integrations available:
 ## Support
 - TTN Forum: https://www.thethingsnetwork.org/forum/
 - RadioLib Documentation: https://github.com/jgromes/RadioLib
-- LMIC Documentation: https://github.com/mcci-catena/arduino-lmic
+- RadioLib LoRaWAN Examples: https://github.com/jgromes/RadioLib/tree/master/examples/LoRaWAN
