@@ -493,10 +493,22 @@ void processDownlink(uint8_t* data, size_t len) {
 
         case CMD_SET_DEBUG:
             if (len >= 2) {
-                debugMode = (data[1] != 0);
-                DEBUG_PRINTF("[CMD] Debug mode: %s\n", debugMode ? "enabled" : "disabled");
+                bool newDebugMode = (data[1] != 0);
+                if (newDebugMode && !debugMode) {
+                    // Turning debug ON - initialize serial if not already done
+                    if (!Serial) {
+                        Serial.begin(115200);
+                        delay(100);  // Small delay for serial init
+                    }
+                    debugMode = true;
+                    DEBUG_PRINTLN("[CMD] Debug mode enabled - serial output activated");
+                } else if (!newDebugMode && debugMode) {
+                    // Turning debug OFF
+                    DEBUG_PRINTLN("[CMD] Debug mode disabled - serial output will stop");
+                    debugMode = false;
+                    Serial.flush();
+                }
                 savePreferences();
-                // Note: Requires restart to take effect for serial port control
             }
             break;
 
