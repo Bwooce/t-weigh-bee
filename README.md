@@ -64,13 +64,15 @@ arduino-cli monitor --port /dev/ttyUSB0 --config baudrate=115200
 
 ## Data Format
 
-### Uplink (Port 1, 16 bytes)
+### Uplink (Port 1, 12 bytes)
 | Bytes | Content | Format |
 |-------|---------|--------|
-| 0-3   | Channel 0 raw ADC | int32, big-endian |
-| 4-7   | Channel 1 raw ADC | int32, big-endian |
-| 8-11  | Channel 2 raw ADC | int32, big-endian |
-| 12-15 | Channel 3 raw ADC | int32, big-endian |
+| 0-2   | Channel 0 raw ADC | int24, big-endian, signed |
+| 3-5   | Channel 1 raw ADC | int24, big-endian, signed |
+| 6-8   | Channel 2 raw ADC | int24, big-endian, signed |
+| 9-11  | Channel 3 raw ADC | int24, big-endian, signed |
+
+Raw ADC values range from -8,388,608 to 8,388,607 (24-bit signed)
 
 ### Configuration Uplink (Port 2, 12 bytes)
 Sent after join and every 12 hours:

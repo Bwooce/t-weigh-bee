@@ -1,11 +1,11 @@
 /*
  * T-Weigh LoRaWAN Sensor Node - RadioLib Implementation
  *
- * UPLINK FORMAT (Port 1, 16 bytes):
- * Bytes 0-3: Channel 0 raw ADC value (int32, big-endian)
- * Bytes 4-7: Channel 1 raw ADC value (int32, big-endian)
- * Bytes 8-11: Channel 2 raw ADC value (int32, big-endian)
- * Bytes 12-15: Channel 3 raw ADC value (int32, big-endian)
+ * UPLINK FORMAT (Port 1, 12 bytes):
+ * Bytes 0-2: Channel 0 raw ADC value (int24, big-endian, signed)
+ * Bytes 3-5: Channel 1 raw ADC value (int24, big-endian, signed)
+ * Bytes 6-8: Channel 2 raw ADC value (int24, big-endian, signed)
+ * Bytes 9-11: Channel 3 raw ADC value (int24, big-endian, signed)
  *
  * CONFIG UPLINK FORMAT (Port 2, 12 bytes):
  * Byte 0: Config version (0x01)
@@ -327,16 +327,17 @@ void loadNoncesFromNVS() {
 // ================================
 
 void sendLoRaWANData() {
-    // Prepare payload (4 bytes per channel for full raw ADC values)
-    // HX711 provides 24-bit signed values
-    uint8_t payload[16];
+    // Prepare payload (3 bytes per channel for 24-bit raw ADC values)
+    // HX711 provides 24-bit signed values (-8,388,608 to 8,388,607)
+    // Reducing from 16 to 12 bytes helps fit within 400ms dwell time at DR2
+    uint8_t payload[12];
     uint8_t payloadSize = 0;
 
     for (int i = 0; i < 4; i++) {
         long rawValue = readLoadCellRaw(i);
 
-        // Pack as big-endian 32-bit signed integer
-        payload[payloadSize++] = (rawValue >> 24) & 0xFF;
+        // Pack as big-endian 24-bit signed integer (3 bytes)
+        // Sign extension handled by casting to 24-bit before packing
         payload[payloadSize++] = (rawValue >> 16) & 0xFF;
         payload[payloadSize++] = (rawValue >> 8) & 0xFF;
         payload[payloadSize++] = rawValue & 0xFF;
@@ -811,6 +812,12 @@ void setup() {
                 if (state == RADIOLIB_ERR_NONE) {
                     DEBUG_PRINTLN("[LoRa] Session restored successfully!");
                     joinedNetwork = true;
+
+                    // For AU915 with dwell time, use DR3 for 12-byte payload
+                    if (enforceDwellTime && loraPlan == LORA_PLAN_AU915) {
+                        DEBUG_PRINTLN("[LoRa] Setting DR3 for AU915 dwell time compliance with 12-byte payload");
+                        node->setDatarate(3);  // DR3 = SF9BW125
+                    }
                 } else {
                     DEBUG_PRINTF("[LoRa] Failed to restore nonces: %d\n", state);
                     sessionSaved = false;
@@ -893,10 +900,10 @@ void setup() {
                 joinedNetwork = true;
                 sessionSaved = true;
 
-                // For AU915 with dwell time, ensure minimum DR2 after join
+                // For AU915 with dwell time, use DR3 for 12-byte payload
                 if (enforceDwellTime && loraPlan == LORA_PLAN_AU915) {
-                    DEBUG_PRINTLN("[LoRa] Setting minimum DR2 for AU915 dwell time compliance");
-                    node->setDatarate(2);  // DR2 = SF10BW125
+                    DEBUG_PRINTLN("[LoRa] Setting DR3 for AU915 dwell time compliance with 12-byte payload");
+                    node->setDatarate(3);  // DR3 = SF9BW125
                 }
 
                 // ALWAYS save nonces to NVS after successful join
@@ -974,6 +981,12 @@ void setup() {
     
     // Normal operation - send data and sleep
     if (joinedNetwork) {
+        // For AU915 with dwell time, use DR3 for 12-byte payload
+        if (enforceDwellTime && loraPlan == LORA_PLAN_AU915) {
+            DEBUG_PRINTLN("[LoRa] Ensuring DR3 for AU915 dwell time compliance with 12-byte payload");
+            node->setDatarate(3);  // DR3 = SF9BW125
+        }
+
         // Give the stack time to settle after join
         delay(2000);
         DEBUG_PRINTLN("[MAIN] Sending sensor data...");
