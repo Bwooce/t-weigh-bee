@@ -335,12 +335,18 @@ void sendLoRaWANData() {
 
     for (int i = 0; i < 4; i++) {
         long rawValue = readLoadCellRaw(i);
+        DEBUG_PRINTF("[HX711] Ch%d: Raw ADC value=%ld\n", i, rawValue);
 
         // Pack as big-endian 24-bit signed integer (3 bytes)
         // Sign extension handled by casting to 24-bit before packing
         payload[payloadSize++] = (rawValue >> 16) & 0xFF;
         payload[payloadSize++] = (rawValue >> 8) & 0xFF;
         payload[payloadSize++] = rawValue & 0xFF;
+    }
+
+    // Ensure all debug output is sent before continuing
+    if (debugMode) {
+        Serial.flush();
     }
     
     // Send uplink with request for downlink
@@ -665,8 +671,11 @@ void enterDeepSleep() {
     DEBUG_PRINTF("[SLEEP] Entering deep sleep for %lu ms\n", txInterval);
     DEBUG_PRINTLN("[SLEEP] Session saved to RTC memory");
 
-    // Flush serial before sleep
-    Serial.flush();
+    // Flush serial before sleep to ensure all output is sent
+    if (debugMode) {
+        Serial.flush();
+        delay(10);  // Small delay to ensure UART completes
+    }
     
     // Configure wake-up timer
     esp_sleep_enable_timer_wakeup(txInterval * 1000ULL);
@@ -902,7 +911,6 @@ void setup() {
             if (state == RADIOLIB_LORAWAN_NEW_SESSION) {
                 DEBUG_PRINTLN("[LoRa] Join successful!");
                 joinedNetwork = true;
-                sessionSaved = true;
 
                 // For AU915 with dwell time, use DR3 for 12-byte payload
                 if (enforceDwellTime && loraPlan == LORA_PLAN_AU915) {
@@ -910,16 +918,20 @@ void setup() {
                     node->setDatarate(3);  // DR3 = SF9BW125
                 }
 
-                // ALWAYS save nonces AND session to NVS/RTC after successful join
-                // This is critical for session restoration after deep sleep
-                uint8_t* nonces = node->getBufferNonces();
-                memcpy(noncesBuffer, nonces, RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
-                saveNoncesToNVS();
-
-                // Also save session to RTC for restoration after deep sleep
+                // ALWAYS save BOTH nonces AND session together after successful join
+                // They must be saved as a matched pair for restoration to work
                 uint8_t* session = node->getBufferSession();
                 memcpy(sessionBuffer, session, RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
+
+                uint8_t* nonces = node->getBufferNonces();
+                memcpy(noncesBuffer, nonces, RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
+
+                // Save nonces to NVS for persistence across power loss
+                saveNoncesToNVS();
+
+                // Mark session as valid only after both are saved
                 sessionSaved = true;
+                DEBUG_PRINTLN("[LoRa] Session and nonces saved for restoration");
                 break;
             } else if (state == RADIOLIB_LORAWAN_SESSION_RESTORED) {
                 DEBUG_PRINTLN("[LoRa] Session restored!");
