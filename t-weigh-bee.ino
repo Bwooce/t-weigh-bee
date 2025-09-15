@@ -129,11 +129,13 @@
 #define CMD_REQUEST_CONFIG  0x30     // Request config uplink
 #define CMD_RESET_DEVICE    0xFF     // Reset device
 
-// LoRa Frequency Plans
-#define LORA_PLAN_AU915     0        // Australia 915MHz
-#define LORA_PLAN_US915     1        // US 915MHz
-#define LORA_PLAN_EU868     2        // Europe 868MHz
-#define LORA_PLAN_AS923     3        // Asia 923MHz
+// LoRa Frequency Plans - using RadioLib's enum values
+#define LORA_PLAN_EU868     BandEU868  // Europe 868MHz (0)
+#define LORA_PLAN_US915     BandUS915  // US 915MHz (1)
+#define LORA_PLAN_EU433     BandEU433  // Europe 433MHz (2)
+#define LORA_PLAN_AU915     BandAU915  // Australia 915MHz (3)
+#define LORA_PLAN_CN470     BandCN470  // China 470MHz (4)
+#define LORA_PLAN_AS923     BandAS923  // Asia 923MHz (5)
 
 // ================================
 // Global Objects
@@ -381,9 +383,15 @@ void sendLoRaWANData() {
         LORAWAN_FPORT,
         downlinkPayload, &downlinkSize
     );
-    
-    if (state == RADIOLIB_ERR_NONE) {
-        DEBUG_PRINTLN("[LoRa] Uplink sent successfully");
+
+    // For sendReceive, positive values mean success with downlink in that window
+    // 0 means success without downlink, negative values are errors
+    if (state >= RADIOLIB_ERR_NONE) {
+        if (state > 0) {
+            DEBUG_PRINTF("[LoRa] Uplink sent successfully, downlink received in window %d\n", state);
+        } else {
+            DEBUG_PRINTLN("[LoRa] Uplink sent successfully, no downlink");
+        }
         transmitCount++;
 
         // Save nonces to NVS every 100 transmissions to minimize flash wear
@@ -394,14 +402,12 @@ void sendLoRaWANData() {
         }
 
         // Send config uplink after join or every 12 hours
-        // Only send after successful data uplink to avoid congestion
-        if (state == RADIOLIB_ERR_NONE) {
-            uint32_t minutesSinceBoot = (bootCount * txInterval) / 60000;
-            if (lastConfigUplink == 0 || (minutesSinceBoot - lastConfigUplink) >= CONFIG_UPLINK_INTERVAL_MIN) {
-                DEBUG_PRINTLN("[Config] Sending periodic configuration uplink...");
-                sendConfigUplink();
-                lastConfigUplink = minutesSinceBoot;
-            }
+        // Removed redundant state check - we're already inside RADIOLIB_ERR_NONE
+        uint32_t minutesSinceBoot = (bootCount * txInterval) / 60000;
+        if (lastConfigUplink == 0 || (minutesSinceBoot - lastConfigUplink) >= CONFIG_UPLINK_INTERVAL_MIN) {
+            DEBUG_PRINTLN("[Config] Sending periodic configuration uplink...");
+            sendConfigUplink();
+            lastConfigUplink = minutesSinceBoot;
         }
 
         // Check for downlink
@@ -609,7 +615,7 @@ void printHelp() {
     Serial.println("status      - Show device status");
     Serial.println("send        - Send data immediately");
     Serial.println("save        - Save LoRaWAN nonces to flash");
-    Serial.println("plan [0-3]  - Set LoRa plan (0=AU915, 1=US915, 2=EU868, 3=AS923)");
+    Serial.println("plan [0-5]  - Set LoRa plan (0=EU868, 1=US915, 2=EU433, 3=AU915, 4=CN470, 5=AS923)");
     Serial.println("subband [n] - Set sub-band (0-8)");
     Serial.println("reset       - Reset device");
     Serial.println("========================\n");
@@ -662,8 +668,20 @@ void sendConfigUplink() {
         downlinkPayload, &downlinkSize
     );
 
-    if (state == RADIOLIB_ERR_NONE) {
-        DEBUG_PRINTLN("[Config] Configuration uplink sent successfully");
+    // For sendReceive, positive values mean success with downlink in that window
+    // 0 means success without downlink, negative values are errors
+    if (state >= RADIOLIB_ERR_NONE) {
+        if (state > 0) {
+            DEBUG_PRINTF("[Config] Configuration uplink sent successfully, downlink received in window %d\n", state);
+        } else {
+            DEBUG_PRINTLN("[Config] Configuration uplink sent successfully, no downlink");
+        }
+
+        // Check for downlink in response to config
+        if (downlinkSize > 0) {
+            DEBUG_PRINTF("[Config] Received downlink (%d bytes) in response to config\n", downlinkSize);
+            processDownlink(downlinkPayload, downlinkSize);
+        }
     } else {
         DEBUG_PRINTF("[Config] Send failed, code %d\n", state);
     }
@@ -716,13 +734,13 @@ void setup() {
     if (debugMode) {
         Serial.begin(115200);
         delay(2000);  // Give time to open serial monitor
-    }
 
-    Serial.println("\n=====================================");
-    Serial.println("T-Weigh LoRaWAN Sensor - RadioLib");
-    Serial.println("=====================================");
-    Serial.printf("Boot count: %lu\n", bootCount);
-    Serial.printf("Wake reason: %d\n", esp_sleep_get_wakeup_cause());
+        Serial.println("\n=====================================");
+        Serial.println("T-Weigh LoRaWAN Sensor - RadioLib");
+        Serial.println("=====================================");
+        Serial.printf("Boot count: %lu\n", bootCount);
+        Serial.printf("Wake reason: %d\n", esp_sleep_get_wakeup_cause());
+    }
 
     // Check for button press early to clear session if needed
     pinMode(0, INPUT_PULLUP);
@@ -962,6 +980,10 @@ void setup() {
                 // Mark session as valid only after both are saved
                 sessionSaved = true;
                 DEBUG_PRINTLN("[LoRa] Session and nonces saved after join");
+
+                // Send config uplink after successful join
+                DEBUG_PRINTLN("[Config] Sending config uplink after join...");
+                lastConfigUplink = 0;  // Reset to force send
                 break;
             } else if (state == RADIOLIB_LORAWAN_SESSION_RESTORED) {
                 DEBUG_PRINTLN("[LoRa] Session restored!");
@@ -1046,6 +1068,16 @@ void setup() {
         } else {
             delay(2000);   // 2 seconds for normal wake
         }
+
+        // Send config uplink after fresh join or if it's time
+        if (lastConfigUplink == 0) {
+            DEBUG_PRINTLN("[Config] Sending initial config uplink after join...");
+            sendConfigUplink();
+            uint32_t minutesSinceBoot = (bootCount * txInterval) / 60000;
+            lastConfigUplink = minutesSinceBoot;
+            delay(2000);  // Small delay between config and data uplinks
+        }
+
         DEBUG_PRINTLN("[MAIN] Sending sensor data...");
         sendLoRaWANData();
     } else {

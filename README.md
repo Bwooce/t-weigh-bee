@@ -82,7 +82,7 @@ Sent automatically after join and every 12 hours:
 | 0    | Config version | Always 0x01 for this version |
 | 1-2  | TX interval | Seconds between transmissions (big-endian) |
 | 3-4  | Stabilization time | Milliseconds to wait after wake (big-endian) |
-| 5    | LoRa plan | 0=AU915, 1=US915, 2=EU868, 3=AS923 |
+| 5    | LoRa plan | 0=EU868, 1=US915, 2=EU433, 3=AU915, 4=CN470, 5=AS923 |
 | 6    | Sub-band | 0-8 (only used for US915/AU915) |
 | 7    | Flags | Bit field (see below) |
 | 8-11 | Firmware | 4 ASCII characters (e.g., "1.0.0") |
@@ -99,7 +99,7 @@ Sent automatically after join and every 12 hours:
 |---------|---------|-------------|-------------|
 | 0x20    | 2 bytes | Set TX interval | 10-65535 seconds |
 | 0x21    | 2 bytes | Set stabilization time | 100-10000 ms |
-| 0x22    | 1 byte  | Set LoRa plan | 0-3 (see above) |
+| 0x22    | 1 byte  | Set LoRa plan | 0-5 (0=EU868, 1=US915, 2=EU433, 3=AU915, 4=CN470, 5=AS923) |
 | 0x23    | 1 byte  | Set sub-band | 0-8 |
 | 0x24    | 1 byte  | Set dwell time enforcement | 0=off, 1=on |
 | 0x25    | 1 byte  | Set HX711 power control | 0=off, 1=on |
@@ -118,7 +118,7 @@ Hold GPIO 0 button during boot to enter interactive mode:
 - `status` - Show device status
 - `send` - Send data immediately
 - `save` - Save LoRaWAN nonces to flash
-- `plan [0-3]` - Set LoRa plan
+- `plan [0-5]` - Set LoRa plan (0=EU868, 1=US915, 2=EU433, 3=AU915, 4=CN470, 5=AS923)
 - `subband [n]` - Set sub-band (0-8)
 - `dwell on/off` - Control dwell time enforcement
 - `reset` - Reset device
