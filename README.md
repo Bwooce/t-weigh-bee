@@ -64,41 +64,50 @@ arduino-cli monitor --port /dev/ttyUSB0 --config baudrate=115200
 
 ## Data Format
 
-### Uplink (Port 1, 12 bytes)
-| Bytes | Content | Format |
-|-------|---------|--------|
-| 0-2   | Channel 0 raw ADC | int24, big-endian, signed |
-| 3-5   | Channel 1 raw ADC | int24, big-endian, signed |
-| 6-8   | Channel 2 raw ADC | int24, big-endian, signed |
-| 9-11  | Channel 3 raw ADC | int24, big-endian, signed |
+### Data Uplink (Port 1, 12 bytes)
+| Bytes | Content | Format | Range |
+|-------|---------|--------|-------|
+| 0-2   | Channel 0 raw ADC | int24, big-endian, signed | -8,388,608 to 8,388,607 |
+| 3-5   | Channel 1 raw ADC | int24, big-endian, signed | -8,388,608 to 8,388,607 |
+| 6-8   | Channel 2 raw ADC | int24, big-endian, signed | -8,388,608 to 8,388,607 |
+| 9-11  | Channel 3 raw ADC | int24, big-endian, signed | -8,388,608 to 8,388,607 |
 
-Raw ADC values range from -8,388,608 to 8,388,607 (24-bit signed)
+**Note:** Raw ADC values are sent without tare or calibration. Application layer should handle conversion to actual weight.
 
-### Configuration Uplink (Port 2, 12 bytes)
-Sent after join and every 12 hours:
-| Byte | Content |
-|------|---------|
-| 0    | Config version (0x01) |
-| 1-2  | TX interval (seconds, big-endian) |
-| 3-4  | Stabilization time (ms, big-endian) |
-| 5    | LoRa plan (0=AU915, 1=US915, 2=EU868, 3=AS923) |
-| 6    | Sub-band (0-8) |
-| 7    | Flags (bit 0: dwell, bit 1: HX711 power, bit 2: debug) |
-| 8-11 | Firmware version (4 bytes ASCII) |
+### Configuration Status Uplink (Port 2, 12 bytes)
+Sent automatically after join and every 12 hours:
+
+| Byte | Content | Description |
+|------|---------|-------------|
+| 0    | Config version | Always 0x01 for this version |
+| 1-2  | TX interval | Seconds between transmissions (big-endian) |
+| 3-4  | Stabilization time | Milliseconds to wait after wake (big-endian) |
+| 5    | LoRa plan | 0=AU915, 1=US915, 2=EU868, 3=AS923 |
+| 6    | Sub-band | 0-8 (only used for US915/AU915) |
+| 7    | Flags | Bit field (see below) |
+| 8-11 | Firmware | 4 ASCII characters (e.g., "1.0.0") |
+
+**Flags byte (byte 7):**
+- Bit 0: Dwell time enforcement (0=disabled, 1=enabled)
+- Bit 1: HX711 power control (0=always on, 1=power down during sleep)
+- Bit 2: Debug mode (0=disabled, 1=enabled with serial output)
+- Bits 3-7: Reserved for future use
 
 ## Downlink Commands (Port 1)
 
-| Command | Bytes | Description |
-|---------|-------|-------------|
-| 0x20    | +2    | Set TX interval (seconds, big-endian) |
-| 0x21    | +2    | Set stabilization time (ms, big-endian) |
-| 0x22    | +1    | Set LoRa plan (0-3) |
-| 0x23    | +1    | Set sub-band (0-8) |
-| 0x24    | +1    | Set dwell time enforcement (0=off, 1=on) |
-| 0x25    | +1    | Set HX711 power control (0=off, 1=on) |
-| 0x26    | +1    | Set debug mode (0=off, 1=on) |
-| 0x30    | 0     | Request config uplink |
-| 0xFF    | 0     | Reset device |
+| Command | Payload | Description | Valid Range |
+|---------|---------|-------------|-------------|
+| 0x20    | 2 bytes | Set TX interval | 10-65535 seconds |
+| 0x21    | 2 bytes | Set stabilization time | 100-10000 ms |
+| 0x22    | 1 byte  | Set LoRa plan | 0-3 (see above) |
+| 0x23    | 1 byte  | Set sub-band | 0-8 |
+| 0x24    | 1 byte  | Set dwell time enforcement | 0=off, 1=on |
+| 0x25    | 1 byte  | Set HX711 power control | 0=off, 1=on |
+| 0x26    | 1 byte  | Set debug mode | 0=off, 1=on |
+| 0x30    | None    | Request immediate config uplink | - |
+| 0xFF    | None    | Reset device | - |
+
+**Note:** All multi-byte values are big-endian. Settings are saved to non-volatile storage and persist across reboots.
 
 ## Serial Commands
 

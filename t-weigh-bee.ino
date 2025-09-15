@@ -1,37 +1,58 @@
 /*
  * T-Weigh LoRaWAN Sensor Node - RadioLib Implementation
+ * Version: 1.0.0
  *
- * UPLINK FORMAT (Port 1, 12 bytes):
- * Bytes 0-2: Channel 0 raw ADC value (int24, big-endian, signed)
- * Bytes 3-5: Channel 1 raw ADC value (int24, big-endian, signed)
- * Bytes 6-8: Channel 2 raw ADC value (int24, big-endian, signed)
+ * UPLINK DATA FORMAT (Port 1, 12 bytes):
+ * ----------------------------------------
+ * Bytes 0-2:  Channel 0 raw ADC value (int24, big-endian, signed)
+ * Bytes 3-5:  Channel 1 raw ADC value (int24, big-endian, signed)
+ * Bytes 6-8:  Channel 2 raw ADC value (int24, big-endian, signed)
  * Bytes 9-11: Channel 3 raw ADC value (int24, big-endian, signed)
  *
- * CONFIG UPLINK FORMAT (Port 2, 12 bytes):
- * Byte 0: Config version (0x01)
- * Bytes 1-2: TX interval (seconds, big-endian)
- * Bytes 3-4: Stabilization time (ms, big-endian)
- * Byte 5: LoRa plan (0=AU915, 1=US915, 2=EU868, 3=AS923)
- * Byte 6: Sub-band (0-8)
- * Byte 7: Flags (bit 0: dwell time, bit 1: HX711 power, bit 2: debug mode)
- * Bytes 8-11: Firmware version (4 bytes ASCII, e.g. "1.0.0")
+ * Raw ADC range: -8,388,608 to 8,388,607 (24-bit signed)
+ * Note: Application layer should handle tare/calibration
+ *
+ * CONFIG STATUS UPLINK (Port 2, 12 bytes):
+ * -----------------------------------------
+ * Byte 0:     Config version (0x01)
+ * Bytes 1-2:  TX interval (seconds, big-endian)
+ * Bytes 3-4:  Stabilization time (ms, big-endian)
+ * Byte 5:     LoRa plan (0=AU915, 1=US915, 2=EU868, 3=AS923)
+ * Byte 6:     Sub-band (0-8, used for US915/AU915)
+ * Byte 7:     Flags byte:
+ *             - Bit 0: Dwell time enforcement (0=off, 1=on)
+ *             - Bit 1: HX711 power control (0=off, 1=on)
+ *             - Bit 2: Debug mode (0=off, 1=on)
+ *             - Bits 3-7: Reserved
+ * Bytes 8-11: Firmware version (4 ASCII chars, e.g. "1.0.0")
+ *
+ * Config uplinks sent: After join + every 12 hours
  *
  * DOWNLINK COMMANDS (Port 1):
- * 0x20 + 2 bytes: Set TX interval (seconds, big-endian)
- * 0x21 + 2 bytes: Set stabilization time (ms, big-endian)
- * 0x22 + 1 byte: Set LoRa plan (0-3)
- * 0x23 + 1 byte: Set sub-band (0-8)
- * 0x24 + 1 byte: Set dwell time enforcement (0=off, 1=on)
- * 0x25 + 1 byte: Set HX711 power control (0=off, 1=on)
- * 0x26 + 1 byte: Set debug mode (0=off, 1=on)
- * 0x30: Request config uplink
- * 0xFF: Reset device
+ * ----------------------------
+ * 0x20 + 2 bytes: Set TX interval (seconds, big-endian, 10-65535)
+ * 0x21 + 2 bytes: Set stabilization time (ms, big-endian, 100-10000)
+ * 0x22 + 1 byte:  Set LoRa plan (0=AU915, 1=US915, 2=EU868, 3=AS923)
+ * 0x23 + 1 byte:  Set sub-band (0-8, for US915/AU915 only)
+ * 0x24 + 1 byte:  Set dwell time enforcement (0=off, 1=on)
+ * 0x25 + 1 byte:  Set HX711 power control (0=off, 1=on)
+ * 0x26 + 1 byte:  Set debug mode (0=off, 1=on)
+ * 0x30:           Request config uplink immediately
+ * 0xFF:           Reset device
  *
- * HARDWARE:
- * - Board: T-Weigh with T-Micro32 (ESP32-PICO-D4)
+ * HARDWARE REQUIREMENTS:
+ * ----------------------
+ * - Board: LilyGO T-Weigh with T-Micro32 (ESP32-PICO-D4)
  * - LoRa: SX1262 transceiver module
- * - Load Cells: 4x via HX711 ADC with CD4051 multiplexer
- * - USB: Requires USB-TTL adapter (not standard USB-C!)
+ * - Load Cells: 4x channels via HX711 24-bit ADC with CD4051 multiplexer
+ * - USB: Requires special USB-TTL adapter from LilyGO (NOT standard USB-C data!)
+ *
+ * POWER OPTIMIZATION:
+ * -------------------
+ * - Deep sleep between transmissions (default 60s)
+ * - HX711 power-down during sleep (configurable)
+ * - 2-second stabilization after wake (configurable)
+ * - Serial port disabled when debug=0 (saves ~20mA)
  */
 
 // Enable RadioLib debug output to see what's being received
@@ -653,13 +674,12 @@ void sendConfigUplink() {
 // ================================
 
 void enterDeepSleep() {
-    // Save LoRaWAN session to RTC memory
-    uint8_t* session = node->getBufferSession();
-    memcpy(sessionBuffer, session, RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
-
-    // Save nonces to RTC memory (could also save to NVS for power-loss persistence)
+    // Save LoRaWAN state to RTC memory (nonces first, then session)
     uint8_t* nonces = node->getBufferNonces();
     memcpy(noncesBuffer, nonces, RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
+
+    uint8_t* session = node->getBufferSession();
+    memcpy(sessionBuffer, session, RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
 
     sessionSaved = true;
 
@@ -818,26 +838,37 @@ void setup() {
             sessionSaved = false;
             joinedNetwork = false;
         } else {
-            // Now restore the saved session
-            state = node->setBufferSession(sessionBuffer);
+            // Restore nonces FIRST, then session (RadioLib requirement)
+            state = node->setBufferNonces(noncesBuffer);
             if (state == RADIOLIB_ERR_NONE) {
-                state = node->setBufferNonces(noncesBuffer);
+                DEBUG_PRINTLN("[LoRa] Nonces restored from RTC");
+                state = node->setBufferSession(sessionBuffer);
                 if (state == RADIOLIB_ERR_NONE) {
-                    DEBUG_PRINTLN("[LoRa] Session restored successfully!");
-                    joinedNetwork = true;
+                    DEBUG_PRINTLN("[LoRa] Session restored, activating...");
 
-                    // For AU915 with dwell time, use DR3 for 12-byte payload
-                    if (enforceDwellTime && loraPlan == LORA_PLAN_AU915) {
-                        DEBUG_PRINTLN("[LoRa] Setting DR3 for AU915 dwell time compliance with 12-byte payload");
-                        node->setDatarate(3);  // DR3 = SF9BW125
+                    // Activate the restored session
+                    state = node->activateOTAA();
+                    if (state == RADIOLIB_LORAWAN_SESSION_RESTORED || state == RADIOLIB_ERR_NONE) {
+                        DEBUG_PRINTLN("[LoRa] Session activated successfully!");
+                        joinedNetwork = true;
+
+                        // For AU915 with dwell time, use DR3 for 12-byte payload
+                        if (enforceDwellTime && loraPlan == LORA_PLAN_AU915) {
+                            DEBUG_PRINTLN("[LoRa] Setting DR3 for AU915 dwell time compliance with 12-byte payload");
+                            node->setDatarate(3);  // DR3 = SF9BW125
+                        }
+                    } else {
+                        DEBUG_PRINTF("[LoRa] Failed to activate session: %d\n", state);
+                        sessionSaved = false;
+                        joinedNetwork = false;
                     }
                 } else {
-                    DEBUG_PRINTF("[LoRa] Failed to restore nonces: %d\n", state);
+                    DEBUG_PRINTF("[LoRa] Failed to restore session: %d\n", state);
                     sessionSaved = false;
                     joinedNetwork = false;
                 }
             } else {
-                DEBUG_PRINTF("[LoRa] Failed to restore session: %d\n", state);
+                DEBUG_PRINTF("[LoRa] Failed to restore nonces: %d\n", state);
                 sessionSaved = false;
                 joinedNetwork = false;
             }
@@ -918,20 +949,19 @@ void setup() {
                     node->setDatarate(3);  // DR3 = SF9BW125
                 }
 
-                // ALWAYS save BOTH nonces AND session together after successful join
-                // They must be saved as a matched pair for restoration to work
-                uint8_t* session = node->getBufferSession();
-                memcpy(sessionBuffer, session, RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
-
+                // Get nonces first, then session (order matters for RadioLib)
                 uint8_t* nonces = node->getBufferNonces();
                 memcpy(noncesBuffer, nonces, RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
+
+                uint8_t* session = node->getBufferSession();
+                memcpy(sessionBuffer, session, RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
 
                 // Save nonces to NVS for persistence across power loss
                 saveNoncesToNVS();
 
                 // Mark session as valid only after both are saved
                 sessionSaved = true;
-                DEBUG_PRINTLN("[LoRa] Session and nonces saved for restoration");
+                DEBUG_PRINTLN("[LoRa] Session and nonces saved after join");
                 break;
             } else if (state == RADIOLIB_LORAWAN_SESSION_RESTORED) {
                 DEBUG_PRINTLN("[LoRa] Session restored!");
