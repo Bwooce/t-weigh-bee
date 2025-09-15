@@ -64,6 +64,12 @@ arduino-cli monitor --port /dev/ttyUSB0 --config baudrate=115200
 
 ## Data Format
 
+**Important Notes**:
+- The payload has been reduced from 24-bit to 16-bit values (8 bytes total) to support SF12 operation for maximum range
+- ADR (Adaptive Data Rate) is disabled for manual control over spreading factor
+- Dwell time enforcement is disabled by default to allow SF12 operation
+- Data rate can be changed via downlink command 0x27 (0=SF12, 1=SF11, etc.)
+
 ### Data Uplink (Port 1, 8 bytes)
 | Bytes | Content | Format | Range |
 |-------|---------|--------|-------|
