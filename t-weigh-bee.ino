@@ -367,10 +367,14 @@ void sendLoRaWANData() {
         }
 
         // Send config uplink after join or every 12 hours
-        uint32_t minutesSinceBoot = (bootCount * txInterval) / 60000;
-        if (lastConfigUplink == 0 || (minutesSinceBoot - lastConfigUplink) >= CONFIG_UPLINK_INTERVAL_MIN) {
-            sendConfigUplink();
-            lastConfigUplink = minutesSinceBoot;
+        // Only send after successful data uplink to avoid congestion
+        if (state == RADIOLIB_ERR_NONE) {
+            uint32_t minutesSinceBoot = (bootCount * txInterval) / 60000;
+            if (lastConfigUplink == 0 || (minutesSinceBoot - lastConfigUplink) >= CONFIG_UPLINK_INTERVAL_MIN) {
+                DEBUG_PRINTLN("[Config] Sending periodic configuration uplink...");
+                sendConfigUplink();
+                lastConfigUplink = minutesSinceBoot;
+            }
         }
 
         // Check for downlink
@@ -906,11 +910,16 @@ void setup() {
                     node->setDatarate(3);  // DR3 = SF9BW125
                 }
 
-                // ALWAYS save nonces to NVS after successful join
-                // This is critical - losing the DevNonce would prevent future joins
+                // ALWAYS save nonces AND session to NVS/RTC after successful join
+                // This is critical for session restoration after deep sleep
                 uint8_t* nonces = node->getBufferNonces();
                 memcpy(noncesBuffer, nonces, RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
                 saveNoncesToNVS();
+
+                // Also save session to RTC for restoration after deep sleep
+                uint8_t* session = node->getBufferSession();
+                memcpy(sessionBuffer, session, RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
+                sessionSaved = true;
                 break;
             } else if (state == RADIOLIB_LORAWAN_SESSION_RESTORED) {
                 DEBUG_PRINTLN("[LoRa] Session restored!");
@@ -988,7 +997,13 @@ void setup() {
         }
 
         // Give the stack time to settle after join
-        delay(2000);
+        // Wait longer after a fresh join to respect duty cycle
+        if (bootCount == 1 || !sessionSaved) {
+            DEBUG_PRINTLN("[MAIN] Waiting 10s after join for duty cycle...");
+            delay(10000);  // 10 seconds after join
+        } else {
+            delay(2000);   // 2 seconds for normal wake
+        }
         DEBUG_PRINTLN("[MAIN] Sending sensor data...");
         sendLoRaWANData();
     } else {
