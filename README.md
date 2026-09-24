@@ -2,7 +2,7 @@
 
 ## Overview
 
-T-Weigh is a LoRaWAN-enabled weight monitoring system designed for the LilyGO T-Weigh board. It reads four load cells via HX711 ADCs and transmits raw ADC values over LoRaWAN to The Things Network (TTN).
+T-Weigh is a LoRaWAN-enabled weight monitoring system designed for the LilyGO T-Weigh board. It reads four load cells via HX711 ADCs and transmits the readings over LoRaWAN to The Things Network (TTN).
 
 ## Hardware Requirements
 
@@ -24,7 +24,7 @@ You need a special **USB-to-TTL adapter** from LilyGO to program this board:
 ## Features
 
 - Reads 4 load cells with 24-bit resolution
-- Sends raw ADC values (no tare/calibration on device)
+- Sends the full 24-bit ADC range, scaled to 16 bits (no tare/calibration on device)
 - Deep sleep between transmissions for power efficiency
 - Configurable via LoRaWAN downlinks
 - Runtime configurable parameters stored in NVS
@@ -65,7 +65,7 @@ arduino-cli monitor --port /dev/ttyUSB0 --config baudrate=115200
 ## Data Format
 
 **Important Notes**:
-- The payload has been reduced from 24-bit to 16-bit values (8 bytes total) to support SF12 operation for maximum range
+- Each 24-bit HX711 reading is shifted right by 8 bits to fit a 16-bit field (8 bytes total), keeping SF12 airtime low and the payload within the 11-byte dwell-time limit
 - ADR (Adaptive Data Rate) is disabled for manual control over spreading factor
 - Dwell time enforcement is disabled by default to allow SF12 operation
 - Data rate can be changed via downlink command 0x27 (0=SF12, 1=SF11, etc.)
@@ -73,12 +73,14 @@ arduino-cli monitor --port /dev/ttyUSB0 --config baudrate=115200
 ### Data Uplink (Port 1, 8 bytes)
 | Bytes | Content | Format | Range |
 |-------|---------|--------|-------|
-| 0-1   | Channel 0 raw value | int16, big-endian, signed | -32,768 to 32,767 |
-| 2-3   | Channel 1 raw value | int16, big-endian, signed | -32,768 to 32,767 |
-| 4-5   | Channel 2 raw value | int16, big-endian, signed | -32,768 to 32,767 |
-| 6-7   | Channel 3 raw value | int16, big-endian, signed | -32,768 to 32,767 |
+| 0-1   | Channel 0 raw >> 8 | int16, big-endian, signed | -32,767 to 32,767 |
+| 2-3   | Channel 1 raw >> 8 | int16, big-endian, signed | -32,767 to 32,767 |
+| 4-5   | Channel 2 raw >> 8 | int16, big-endian, signed | -32,767 to 32,767 |
+| 6-7   | Channel 3 raw >> 8 | int16, big-endian, signed | -32,767 to 32,767 |
 
-**Note:** Raw ADC values are sent without tare or calibration. Application layer should handle conversion to actual weight.
+- Multiply by 256 to get approximate raw HX711 counts (resolution is 256 counts per step).
+- `-32768` (0x8000) means no reading from that channel (disconnected or timed out).
+- No tare or calibration is applied on the device; the application layer converts to weight.
 
 ### Configuration Status Uplink (Port 2, 12 bytes)
 Sent automatically after join and every 12 hours:

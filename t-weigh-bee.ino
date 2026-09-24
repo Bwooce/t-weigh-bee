@@ -1,15 +1,18 @@
 /*
  * T-Weigh LoRaWAN Sensor Node - RadioLib Implementation
- * Version: 1.0.0
+ * Version: 1.1.0
  *
  * UPLINK DATA FORMAT (Port 1, 8 bytes):
  * ----------------------------------------
- * Bytes 0-1:  Channel 0 raw value (int16, big-endian, signed)
- * Bytes 2-3:  Channel 1 raw value (int16, big-endian, signed)
- * Bytes 4-5:  Channel 2 raw value (int16, big-endian, signed)
- * Bytes 6-7:  Channel 3 raw value (int16, big-endian, signed)
+ * Bytes 0-1:  Channel 0 scaled value (int16, big-endian, signed)
+ * Bytes 2-3:  Channel 1 scaled value (int16, big-endian, signed)
+ * Bytes 4-5:  Channel 2 scaled value (int16, big-endian, signed)
+ * Bytes 6-7:  Channel 3 scaled value (int16, big-endian, signed)
  *
- * Raw value range: -32,768 to 32,767 (16-bit signed)
+ * Scaled value = 24-bit raw HX711 reading >> 8 (range -32,767 to 32,767,
+ * i.e. the full ADC range at 256 counts per step). Multiply by 256 to
+ * recover approximate raw counts.
+ * -32,768 (0x8000) = no reading from that channel (disconnected/timeout).
  * Note: Application layer should handle tare/calibration
  *
  * CONFIG STATUS UPLINK (Port 2, 12 bytes):
@@ -100,6 +103,9 @@
 // Load Cell Configuration
 #define LOADCELL_DOUT_PIN  21
 #define LOADCELL_SCK_PIN   22
+#define HX711_NO_READING   LONG_MIN      // readLoadCellRaw() result when the channel never became ready
+#define PAYLOAD_SHIFT      8             // 24-bit raw >> 8 fits the 16-bit payload field
+#define PAYLOAD_NO_READING INT16_MIN     // Payload sentinel for a channel with no reading
 
 // Channel Multiplexer Control Pins
 #define CDA_PIN  27
@@ -196,7 +202,7 @@ uint16_t wakeStabilizeMs = WAKE_STABILIZE_MS;  // HX711 stabilization time
 bool enforceDwellTime = false;       // Disabled to allow SF12 with 8-byte payload
 bool hx711PowerControl = true;       // Default to power down HX711 during sleep
 bool debugMode = DEBUG;               // Runtime debug mode
-const char* firmwareVersion = "1.0.0";
+const char* firmwareVersion = "1.1.0";
 
 // ================================
 // Function Declarations
@@ -257,7 +263,7 @@ long readLoadCellRaw(uint8_t channel) {
         }
     }
 
-    long rawValue = 0;
+    long rawValue = HX711_NO_READING;
 
     if (validReadings > 0) {
         rawValue = sum / validReadings;
@@ -265,7 +271,7 @@ long readLoadCellRaw(uint8_t channel) {
                      channel, rawValue, validReadings, MAX_ATTEMPTS);
     } else {
         // No valid readings after 5 attempts - likely disconnected
-        DEBUG_PRINTF("[HX711] Ch%d: No readings after %d attempts, sending 0\n", channel, MAX_ATTEMPTS);
+        DEBUG_PRINTF("[HX711] Ch%d: No readings after %d attempts\n", channel, MAX_ATTEMPTS);
     }
 
     return rawValue;
@@ -384,8 +390,8 @@ void loadNoncesFromNVS() {
 
 void sendLoRaWANData() {
     // Prepare payload (2 bytes per channel for 16-bit values)
-    // Using 16-bit to fit within 11-byte limit for SF12 with dwell time
-    // This gives range of -32768 to 32767 which is sufficient for most scales
+    // Using 16-bit to fit within 11-byte limit for SF12 with dwell time.
+    // The 24-bit raw reading is shifted right by 8 so the full ADC range fits.
     uint8_t payload[8];
     uint8_t payloadSize = 0;
 
@@ -393,10 +399,16 @@ void sendLoRaWANData() {
         long rawValue = readLoadCellRaw(i);
         DEBUG_PRINTF("[HX711] Ch%d: Raw ADC value=%ld\n", i, rawValue);
 
-        // Clamp to 16-bit range
-        int16_t value16 = rawValue;
-        if (rawValue > 32767) value16 = 32767;
-        else if (rawValue < -32768) value16 = -32768;
+        int16_t value16;
+        if (rawValue == HX711_NO_READING) {
+            value16 = PAYLOAD_NO_READING;
+        } else {
+            long scaled = rawValue >> PAYLOAD_SHIFT;
+            // Keep INT16_MIN free for the no-reading sentinel
+            if (scaled > INT16_MAX) scaled = INT16_MAX;
+            else if (scaled <= PAYLOAD_NO_READING) scaled = PAYLOAD_NO_READING + 1;
+            value16 = scaled;
+        }
 
         // Pack as big-endian 16-bit signed integer (2 bytes)
         payload[payloadSize++] = (value16 >> 8) & 0xFF;
@@ -607,7 +619,11 @@ void processSerialCommand() {
     else if (command == "read") {
         for (int i = 0; i < 4; i++) {
             long rawValue = readLoadCellRaw(i);
-            Serial.printf("Channel %d: %ld (raw ADC)\n", i, rawValue);
+            if (rawValue == HX711_NO_READING) {
+                Serial.printf("Channel %d: no reading\n", i);
+            } else {
+                Serial.printf("Channel %d: %ld (raw ADC), %ld (payload)\n", i, rawValue, rawValue >> PAYLOAD_SHIFT);
+            }
         }
     }
     else if (command == "status") {

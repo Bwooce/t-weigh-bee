@@ -46,14 +46,16 @@ Everything runs in `setup()`; `loop()` is unused because the device deep-sleeps 
 
 1. **Boot**: load settings from NVS (`Preferences`, namespace `t-weigh`), sanitising out-of-range values
 2. **LoRaWAN**: build a `LoRaWANNode` for the configured plan; restore session from RTC memory if present, otherwise OTAA join. Nonces are kept in RTC memory and saved to NVS every 100 uplinks.
-3. **Send**: read all 4 channels (averaged raw HX711 counts), send an 8-byte uplink on port 1, handle any downlink
+3. **Send**: read all 4 channels (averaged raw HX711 counts), scale to 16 bits, send an 8-byte uplink on port 1, handle any downlink
 4. **Config uplink**: 12-byte status on port 2 after join and every 12 hours
 5. **Sleep**: save session to RTC, optionally power down the HX711, deep sleep for `txInterval`
 
 Defaults: 60 s interval, AU915 sub-band 2, DR0/SF12, ADR off, dwell time off, HX711 power control on, 2000 ms HX711 stabilisation after wake.
 
 ### Uplink payload (port 1, 8 bytes)
-Four int16 big-endian **raw ADC counts** (channel 0–3). There is no tare or calibration on the device; the application/TTN decoder is expected to convert to weight. Raw values are clamped to ±32767 and a channel with no reading sends 0.
+Four int16 big-endian values (channel 0–3), each the signed 24-bit HX711 reading `>> 8` (`PAYLOAD_SHIFT`), so the full ADC range fits at 256 counts per step; the decoder multiplies by 256. `-32768` means no reading (`readLoadCellRaw()` returns `HX711_NO_READING`). There is no tare or calibration on the device; the application/TTN decoder converts to weight.
+
+The HX711 library is Rob Tillaart's (`read()` returns the sign-extended 24-bit value as a float); it does not limit values to 16 bits.
 
 Full payload, config-uplink and decoder details: `README.md` and `TTN_Setup_Guide.md`.
 

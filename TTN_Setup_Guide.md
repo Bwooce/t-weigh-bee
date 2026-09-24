@@ -18,7 +18,7 @@ This project implements a LoRaWAN sensor node for the T-Weigh board that:
 
 Install these libraries via Arduino CLI or Arduino IDE Library Manager:
 1. **RadioLib** by Jan Gromes - Universal wireless library with native SX1262 support
-2. **HX711** by Bogdan Necula - Load cell interface library
+2. **HX711** by Rob Tillaart - Load cell interface library (`arduino-cli lib install HX711`)
 
 ## The Things Network Setup
 
@@ -101,21 +101,22 @@ function decodeUplink(input) {
   var port = input.fPort;
 
   if (port === 1) {
-    // Data uplink - 8 bytes with 16-bit signed values
-    // Convert from signed 16-bit to actual values
-    function toInt16(b1, b2) {
+    // Data uplink - 8 bytes, 4 x int16 = 24-bit raw HX711 reading >> 8
+    // -32768 means no reading from that channel
+    function toRaw(b1, b2) {
       var val = (b1 << 8) | b2;
       if (val > 32767) val -= 65536;
-      return val;
+      if (val === -32768) return null;
+      return val * 256;  // approximate raw HX711 counts
     }
 
-    decoded.channel0_raw = toInt16(bytes[0], bytes[1]);
-    decoded.channel1_raw = toInt16(bytes[2], bytes[3]);
-    decoded.channel2_raw = toInt16(bytes[4], bytes[5]);
-    decoded.channel3_raw = toInt16(bytes[6], bytes[7]);
+    decoded.channel0_raw = toRaw(bytes[0], bytes[1]);
+    decoded.channel1_raw = toRaw(bytes[2], bytes[3]);
+    decoded.channel2_raw = toRaw(bytes[4], bytes[5]);
+    decoded.channel3_raw = toRaw(bytes[6], bytes[7]);
 
-    // Note: These are raw ADC values, apply calibration as needed
-    // Example: weight_grams = (raw_value - tare_value) / calibration_factor
+    // Note: These are raw ADC counts, apply tare/calibration as needed
+    // Example: weight_grams = (raw_value - tare_value) / counts_per_gram
   } else if (port === 2) {
     // Configuration uplink - 12 bytes
     decoded.config_version = bytes[0];
@@ -165,7 +166,7 @@ The `CALIBRATION_VALUE` constant (default 2208) may need adjustment:
 
 To find correct value:
 1. Place known weight on cell
-2. Read raw value
+2. Read the raw value (serial `read` command in interactive mode, or `channelN_raw` from the decoder)
 3. Calculate: `CALIBRATION_VALUE = (raw_reading - tare) / actual_weight_grams`
 
 ## Troubleshooting
