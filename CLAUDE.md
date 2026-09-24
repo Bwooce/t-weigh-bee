@@ -113,7 +113,6 @@ Set `#define DEBUG 1` to enable serial output:
 - `lorawan_credentials.h` - TTN credentials (gitignored)
 - `lorawan_credentials.h.example` - Template for credentials
 - `TTN_Setup_Guide.md` - Detailed setup instructions
-- `direct/` - Contains alternative implementation files
 
 ## Notes
 

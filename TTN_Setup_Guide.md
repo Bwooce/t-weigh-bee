@@ -50,20 +50,20 @@ After device registration, go to device settings and copy:
 2. Update with your actual TTN credentials:
 
 ```cpp
-// Device EUI (LSB format - reverse byte order from TTN console)
-uint64_t devEUI = 0x0123456789ABCDEF;
+// JoinEUI/AppEUI (LSB format - usually all zeros for TTN)
+static const uint8_t PROGMEM APPEUI[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
-// Join/Application EUI (LSB format - usually all zeros for TTN)
-uint64_t joinEUI = 0x0000000000000000;
+// Device EUI (LSB format - reverse byte order from TTN console)
+// e.g. TTN shows 70B3D57ED0072B1D -> { 0x1D, 0x2B, 0x07, 0xD0, 0x7E, 0xD5, 0xB3, 0x70 }
+static const uint8_t PROGMEM DEVEUI[8] = { 0x1D, 0x2B, 0x07, 0xD0, 0x7E, 0xD5, 0xB3, 0x70 };
 
 // Application Key (MSB format - copy exactly from TTN console)
-uint8_t appKey[] = { 0x2B, 0x7E, 0x15, 0x16, 0x28, 0xAE, 0xD2, 0xA6,
-                      0xAB, 0xF7, 0x15, 0x88, 0x09, 0xCF, 0x4F, 0x3C };
-
-// Network Key (not used for LoRaWAN 1.0.x, same as appKey)
-uint8_t nwkKey[] = { 0x2B, 0x7E, 0x15, 0x16, 0x28, 0xAE, 0xD2, 0xA6,
-                      0xAB, 0xF7, 0x15, 0x88, 0x09, 0xCF, 0x4F, 0x3C };
+// Also used as the network key (LoRaWAN 1.0.x)
+static const uint8_t PROGMEM APPKEY[16] = { 0x2B, 0x7E, 0x15, 0x16, 0x28, 0xAE, 0xD2, 0xA6,
+                                             0xAB, 0xF7, 0x15, 0x88, 0x09, 0xCF, 0x4F, 0x3C };
 ```
+
+Note: the firmware currently uses an all-zero JoinEUI regardless of `APPEUI`.
 
 ## Arduino IDE Setup
 
@@ -204,9 +204,9 @@ With 60-second interval:
 |---------|---------|-------------|
 | 0x01 | None | Tare all channels |
 | 0x10-0x13 | None | Tare specific channel (0-3) |
-| 0x20 | 2 bytes | Set TX interval (10-65535 seconds) |
-| 0x21 | 2 bytes | Set stabilization time (100-10000 ms) |
-| 0x22 | 1 byte | Set LoRa plan (0=EU868, 1=US915, 3=AU915, etc.) |
+| 0x20 | 2 bytes | Set TX interval (10-65535 seconds; smaller values are ignored) |
+| 0x21 | 2 bytes | Set stabilisation time (100-10000 ms; out-of-range values are ignored) |
+| 0x22 | 1 byte | Set LoRa plan (0=EU868, 1=US915, 3=AU915; other values are ignored; restart to apply) |
 | 0x23 | 1 byte | Set sub-band (0-8) |
 | 0x24 | 1 byte | Set dwell time (0=off, 1=on) |
 | 0x25 | 1 byte | Set HX711 power control (0=off, 1=on) |

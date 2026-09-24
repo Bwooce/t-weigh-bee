@@ -17,7 +17,7 @@
  * Byte 0:     Config version (0x01)
  * Bytes 1-2:  TX interval (seconds, big-endian)
  * Bytes 3-4:  Stabilization time (ms, big-endian)
- * Byte 5:     LoRa plan (0=AU915, 1=US915, 2=EU868, 3=AS923)
+ * Byte 5:     LoRa plan (0=EU868, 1=US915, 3=AU915)
  * Byte 6:     Sub-band (0-8, used for US915/AU915)
  * Byte 7:     Flags byte:
  *             - Bit 0: Dwell time enforcement (0=off, 1=on)
@@ -32,7 +32,7 @@
  * ----------------------------
  * 0x20 + 2 bytes: Set TX interval (seconds, big-endian, 10-65535)
  * 0x21 + 2 bytes: Set stabilization time (ms, big-endian, 100-10000)
- * 0x22 + 1 byte:  Set LoRa plan (0=AU915, 1=US915, 2=EU868, 3=AS923)
+ * 0x22 + 1 byte:  Set LoRa plan (0=EU868, 1=US915, 3=AU915)
  * 0x23 + 1 byte:  Set sub-band (0-8, for US915/AU915 only)
  * 0x24 + 1 byte:  Set dwell time enforcement (0=off, 1=on)
  * 0x25 + 1 byte:  Set HX711 power control (0=off, 1=on)
@@ -112,6 +112,10 @@
 #define CALIBRATION_SAMPLES 10       // Number of samples for calibration
 #define CHANNEL_SETTLE_MS   100      // Time to wait after switching channels
 #define WAKE_STABILIZE_MS   2000     // Time to wait after wake for HX711 to stabilize (2s recommended)
+#define TX_INTERVAL_MIN_S   10       // Minimum TX interval accepted from downlink/preferences (seconds)
+#define TX_INTERVAL_MAX_S   65535    // Maximum TX interval (fits the 16-bit config uplink field)
+#define STABILIZE_MIN_MS    100      // Minimum HX711 stabilization time (ms)
+#define STABILIZE_MAX_MS    10000    // Maximum HX711 stabilization time (ms)
 #define CONFIG_UPLINK_INTERVAL_MIN 720  // Send config every 12 hours (720 minutes)
 
 // LoRaWAN Configuration  
@@ -121,7 +125,7 @@
 // Downlink Commands
 #define CMD_SET_INTERVAL    0x20     // Set TX interval (followed by 2 bytes, seconds)
 #define CMD_SET_STABILIZE   0x21     // Set stabilization time (followed by 2 bytes, milliseconds)
-#define CMD_SET_LORA_PLAN   0x22     // Set LoRa plan (followed by 1 byte: 0=AU915, 1=US915, 2=EU868, 3=AS923)
+#define CMD_SET_LORA_PLAN   0x22     // Set LoRa plan (followed by 1 byte: 0=EU868, 1=US915, 3=AU915)
 #define CMD_SET_SUBBAND     0x23     // Set sub-band (followed by 1 byte: 0-8)
 #define CMD_SET_DWELL       0x24     // Set dwell time enforcement (followed by 1 byte: 0=off, 1=on)
 #define CMD_SET_HX711_PWR   0x25     // Set HX711 power control (followed by 1 byte: 0=off, 1=on)
@@ -137,6 +141,20 @@
 #define LORA_PLAN_AU915     BandAU915  // Australia 915MHz (3)
 #define LORA_PLAN_CN470     BandCN470  // China 470MHz (4)
 #define LORA_PLAN_AS923     BandAS923  // Asia 923MHz (5)
+
+// Only these plans have a LoRaWANNode created in setup(); anything else is rejected
+bool isSupportedLoraPlan(uint8_t plan) {
+    return plan == LORA_PLAN_EU868 || plan == LORA_PLAN_US915 || plan == LORA_PLAN_AU915;
+}
+
+const char* loraPlanName(uint8_t plan) {
+    switch (plan) {
+        case LORA_PLAN_EU868: return "EU868";
+        case LORA_PLAN_US915: return "US915";
+        case LORA_PLAN_AU915: return "AU915";
+        default:              return "unknown";
+    }
+}
 
 // ================================
 // Global Objects
@@ -271,6 +289,17 @@ void loadPreferences() {
 
     // Load HX711 stabilization time
     wakeStabilizeMs = preferences.getUShort("stabilizeMs", WAKE_STABILIZE_MS);
+
+    // Recover from out-of-range values saved by older firmware (e.g. a 0 s interval)
+    if (txInterval < TX_INTERVAL_MIN_S * 1000UL || txInterval > TX_INTERVAL_MAX_S * 1000UL) {
+        txInterval = TX_INTERVAL_MS;
+    }
+    if (wakeStabilizeMs < STABILIZE_MIN_MS || wakeStabilizeMs > STABILIZE_MAX_MS) {
+        wakeStabilizeMs = WAKE_STABILIZE_MS;
+    }
+    if (!isSupportedLoraPlan(loraPlan)) {
+        loraPlan = LORA_PLAN_AU915;
+    }
 
     // Load dwell time enforcement setting
     enforceDwellTime = preferences.getBool("dwellTime", true);
@@ -442,27 +471,36 @@ void processDownlink(uint8_t* data, size_t len) {
     switch (command) {
         case CMD_SET_INTERVAL:
             if (len >= 3) {
-                txInterval = (data[1] << 8) | data[2];
-                txInterval *= 1000;  // Convert seconds to milliseconds
-                DEBUG_PRINTF("[CMD] Set TX interval to %lu ms\n", txInterval);
-                savePreferences();
+                uint16_t seconds = (data[1] << 8) | data[2];
+                if (seconds >= TX_INTERVAL_MIN_S) {
+                    txInterval = seconds * 1000UL;  // Convert seconds to milliseconds
+                    DEBUG_PRINTF("[CMD] Set TX interval to %lu ms\n", txInterval);
+                    savePreferences();
+                } else {
+                    DEBUG_PRINTF("[CMD] Rejected TX interval %u s (min %d s)\n", seconds, TX_INTERVAL_MIN_S);
+                }
             }
             break;
 
         case CMD_SET_STABILIZE:
             if (len >= 3) {
-                wakeStabilizeMs = (data[1] << 8) | data[2];
-                DEBUG_PRINTF("[CMD] Set stabilization time to %u ms\n", wakeStabilizeMs);
-                savePreferences();
+                uint16_t ms = (data[1] << 8) | data[2];
+                if (ms >= STABILIZE_MIN_MS && ms <= STABILIZE_MAX_MS) {
+                    wakeStabilizeMs = ms;
+                    DEBUG_PRINTF("[CMD] Set stabilization time to %u ms\n", wakeStabilizeMs);
+                    savePreferences();
+                } else {
+                    DEBUG_PRINTF("[CMD] Rejected stabilization time %u ms (%d-%d ms)\n", ms, STABILIZE_MIN_MS, STABILIZE_MAX_MS);
+                }
             }
             break;
 
         case CMD_SET_LORA_PLAN:
             if (len >= 2) {
                 uint8_t plan = data[1];
-                if (plan <= 3) {
+                if (isSupportedLoraPlan(plan)) {
                     loraPlan = plan;
-                    DEBUG_PRINTF("[CMD] Set LoRa plan to %d\n", loraPlan);
+                    DEBUG_PRINTF("[CMD] Set LoRa plan to %s\n", loraPlanName(loraPlan));
                     savePreferences();
                     // Note: Requires restart to take effect
                 }
@@ -578,19 +616,18 @@ void processSerialCommand() {
         Serial.printf("Network joined: %s\n", joinedNetwork ? "Yes" : "No");
         Serial.printf("TX interval: %lu ms\n", txInterval);
         Serial.printf("Transmissions: %lu\n", transmitCount);
-        const char* planNames[] = {"AU915", "US915", "EU868", "AS923"};
-        Serial.printf("LoRa Plan: %s\n", planNames[loraPlan]);
+        Serial.printf("LoRa Plan: %s\n", loraPlanName(loraPlan));
         Serial.printf("Sub-band: %d\n", loraSubBand);
         Serial.printf("Dwell time: %s\n", enforceDwellTime ? "Enforced" : "Disabled");
     }
     else if (command.startsWith("plan ")) {
         int plan = command.substring(5).toInt();
-        if (plan >= 0 && plan <= 3) {
+        if (plan >= 0 && plan <= 255 && isSupportedLoraPlan(plan)) {
             loraPlan = plan;
             savePreferences();
             Serial.println("LoRa plan updated - restart to apply");
         } else {
-            Serial.println("Invalid plan (0=AU915, 1=US915, 2=EU868, 3=AS923)");
+            Serial.println("Invalid plan (0=EU868, 1=US915, 3=AU915)");
         }
     }
     else if (command.startsWith("subband ")) {
@@ -648,7 +685,7 @@ void printHelp() {
     Serial.println("status      - Show device status");
     Serial.println("send        - Send data immediately");
     Serial.println("save        - Save LoRaWAN nonces to flash");
-    Serial.println("plan [0-5]  - Set LoRa plan (0=EU868, 1=US915, 2=EU433, 3=AU915, 4=CN470, 5=AS923)");
+    Serial.println("plan [n]    - Set LoRa plan (0=EU868, 1=US915, 3=AU915)");
     Serial.println("subband [n] - Set sub-band (0-8)");
     Serial.println("reset       - Reset device");
     Serial.println("========================\n");
