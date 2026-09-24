@@ -3,7 +3,7 @@
 ## Overview
 This project implements a LoRaWAN sensor node for the T-Weigh board that:
 - Reads 4 load cells via HX711 with multiplexed channels
-- Sends weight data every 60 seconds
+- Sends weight data every 20 minutes (SF10, within TTN fair use)
 - Uses deep sleep between transmissions for power efficiency
 - Operates on AU915 frequency band for Australia
 
@@ -147,9 +147,9 @@ function decodeUplink(input) {
 The code implements several power-saving features:
 1. **Deep Sleep**: ESP32 enters deep sleep between transmissions
 2. **RTC Memory**: Preserves LoRaWAN session data across sleep cycles
-3. **Manual Data Rate**: ADR disabled for full control over SF (default SF12 for max range)
+3. **Manual Data Rate**: ADR disabled for full control over SF (default SF10; SF12 via downlink `27 00` needs an interval of 72+ minutes for TTN fair use)
 4. **HX711 Power Control**: Can power down load cell ADC during sleep
-5. **60-second interval**: Default interval, adjustable via downlink
+5. **20-minute interval**: Default interval, adjustable via downlink
 
 ## Calibration
 
@@ -194,9 +194,8 @@ For battery operation:
 3. Adjust sleep interval for desired battery life
 
 ## Expected Battery Life
-With 60-second interval:
-- 2000mAh battery: ~2-3 weeks
-- 5000mAh battery: ~5-8 weeks
+Earlier estimates at a 60-second interval were ~2-3 weeks on 2000mAh and ~5-8 weeks on 5000mAh.
+The 20-minute default wakes 20x less often, so expect considerably longer; measure on your hardware, as sleep current then dominates.
 - Solar panel addition recommended for permanent installation
 
 ## Downlink Commands (Port 1)

@@ -50,7 +50,7 @@ Everything runs in `setup()`; `loop()` is unused because the device deep-sleeps 
 4. **Config uplink**: 12-byte status on port 2 after join and every 12 hours
 5. **Sleep**: save session to RTC, optionally power down the HX711, deep sleep for `txInterval`
 
-Defaults: 60 s interval, AU915 sub-band 2, DR0/SF12, ADR off, dwell time off, HX711 power control on, 2000 ms HX711 stabilisation after wake.
+Defaults: 20 min interval, AU915 sub-band 2, DR2/SF10, ADR off, dwell time off, HX711 power control on, 2000 ms HX711 stabilisation after wake. SF10 at 20 min keeps within TTN's 30 s/day uplink airtime fair use (SF12 needs ≥72 min); keep interval and data rate in step if either default changes.
 
 ### Uplink payload (port 1, 8 bytes)
 Four int16 big-endian values (channel 0–3), each the signed 24-bit HX711 reading `>> 8` (`PAYLOAD_SHIFT`), so the full ADC range fits at 256 counts per step; the decoder multiplies by 256. `-32768` means no reading (`readLoadCellRaw()` returns `HX711_NO_READING`). There is no tare or calibration on the device; the application/TTN decoder converts to weight.

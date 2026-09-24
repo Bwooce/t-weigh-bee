@@ -65,10 +65,20 @@ arduino-cli monitor --port /dev/ttyUSB0 --config baudrate=115200
 ## Data Format
 
 **Important Notes**:
-- Each 24-bit HX711 reading is shifted right by 8 bits to fit a 16-bit field (8 bytes total), keeping SF12 airtime low and the payload within the 11-byte dwell-time limit
+- Each 24-bit HX711 reading is shifted right by 8 bits to fit a 16-bit field (8 bytes total), keeping airtime low and the payload within the 11-byte dwell-time limit
 - ADR (Adaptive Data Rate) is disabled for manual control over spreading factor
-- Dwell time enforcement is disabled by default to allow SF12 operation
+- Default is DR2/SF10 with a 20-minute interval, which stays within TTN's 30 s/day uplink airtime fair-use limit (see table below)
+- Dwell time enforcement is disabled by default so SF12/SF11 can be selected
 - Data rate can be changed via downlink command 0x27 (0=SF12, 1=SF11, etc.)
+
+| SF | Airtime (8-byte payload) | Shortest interval for TTN fair use |
+|----|---------------------------|------------------------------------|
+| SF12 (DR0) | 1,483 ms | ~71 min |
+| SF11 (DR1) | 741 ms | ~36 min |
+| SF10 (DR2) | 371 ms | ~18 min |
+| SF9 (DR3) | 185 ms | ~9 min |
+
+If you change the data rate by downlink, change the interval to match (0x20). Leave some headroom for the 12-hourly config uplink.
 
 ### Data Uplink (Port 1, 8 bytes)
 | Bytes | Content | Format | Range |
@@ -138,7 +148,7 @@ Hold GPIO 0 button during boot to enter interactive mode:
 
 The device implements several power-saving features:
 
-1. **Deep Sleep**: Between transmissions (default 60 seconds)
+1. **Deep Sleep**: Between transmissions (default 20 minutes)
 2. **HX711 Power Control**: Configurable power-down during sleep
 3. **Serial Port**: Disabled when debug mode is off
 4. **Stabilization Time**: 2 seconds recommended after wake
@@ -163,7 +173,7 @@ The device implements several power-saving features:
 - Ensure DevNonce is incrementing (check serial output)
 
 ### No Data After Join
-- Device may be in deep sleep (60s default)
+- Device may be in deep sleep (20 min default)
 - Check if session is being restored properly
 - Verify HX711 connections
 

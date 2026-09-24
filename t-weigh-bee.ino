@@ -52,7 +52,7 @@
  *
  * POWER OPTIMIZATION:
  * -------------------
- * - Deep sleep between transmissions (default 60s)
+ * - Deep sleep between transmissions (default 20 min)
  * - HX711 power-down during sleep (configurable)
  * - 2-second stabilization after wake (configurable)
  * - Serial port disabled when debug=0 (saves ~20mA)
@@ -114,7 +114,8 @@
 #define CDD_PIN  25
 
 // Timing Configuration
-#define TX_INTERVAL_MS      60000   // Send every 60 seconds
+#define TX_INTERVAL_MS      1200000 // Send every 20 minutes (SF10 ~371 ms/uplink keeps within TTN's 30 s/day fair use)
+#define DEFAULT_DATA_RATE   2        // DR2 = SF10 on AU915
 #define CALIBRATION_SAMPLES 10       // Number of samples for calibration
 #define CHANNEL_SETTLE_MS   100      // Time to wait after switching channels
 #define WAKE_STABILIZE_MS   2000     // Time to wait after wake for HX711 to stabilize (2s recommended)
@@ -197,9 +198,9 @@ uint32_t txInterval = TX_INTERVAL_MS;
 bool joinedNetwork = false;
 uint8_t loraPlan = LORA_PLAN_AU915;  // Default to AU915
 uint8_t loraSubBand = 2;             // Default to sub-band 2 for TTN
-uint8_t loraDataRate = 0;            // Default to DR0 (SF12) for maximum range
+uint8_t loraDataRate = DEFAULT_DATA_RATE;  // SF10: fits TTN fair use at a 20 min interval and AU915 400 ms dwell
 uint16_t wakeStabilizeMs = WAKE_STABILIZE_MS;  // HX711 stabilization time
-bool enforceDwellTime = false;       // Disabled to allow SF12 with 8-byte payload
+bool enforceDwellTime = false;       // Disabled so DR0/DR1 (SF12/SF11) can be selected by downlink
 bool hx711PowerControl = true;       // Default to power down HX711 during sleep
 bool debugMode = DEBUG;               // Runtime debug mode
 const char* firmwareVersion = "1.1.0";
@@ -291,7 +292,7 @@ void loadPreferences() {
     // Load LoRa configuration
     loraPlan = preferences.getUChar("loraPlan", LORA_PLAN_AU915);
     loraSubBand = preferences.getUChar("subBand", 2);
-    loraDataRate = preferences.getUChar("dataRate", 0);
+    loraDataRate = preferences.getUChar("dataRate", DEFAULT_DATA_RATE);
 
     // Load HX711 stabilization time
     wakeStabilizeMs = preferences.getUShort("stabilizeMs", WAKE_STABILIZE_MS);
@@ -302,6 +303,9 @@ void loadPreferences() {
     }
     if (wakeStabilizeMs < STABILIZE_MIN_MS || wakeStabilizeMs > STABILIZE_MAX_MS) {
         wakeStabilizeMs = WAKE_STABILIZE_MS;
+    }
+    if (loraDataRate > 5) {
+        loraDataRate = DEFAULT_DATA_RATE;
     }
     if (!isSupportedLoraPlan(loraPlan)) {
         loraPlan = LORA_PLAN_AU915;
